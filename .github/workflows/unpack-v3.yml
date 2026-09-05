@@ -1,14 +1,15 @@
-name: Unpack V3 and Build
+name: Build Android V3
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  unpack-build:
+  build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,48 +18,51 @@ jobs:
         shell: bash
         run: |
           set -e
-          test -f AndroidResearchAgentV3_UPLOAD.zip
-          unzip -o AndroidResearchAgentV3_UPLOAD.zip -d .
-          rm AndroidResearchAgentV3_UPLOAD.zip
-          mkdir -p .github/workflows
-          cat > .github/workflows/build.yml <<'EOF'
-          name: Build Android V3
-          on:
-            workflow_dispatch:
-          permissions:
-            contents: read
-          jobs:
-            build:
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: actions/setup-java@v4
-                  with:
-                    distribution: temurin
-                    java-version: '17'
-                - name: Set up Android SDK
-                  uses: android-actions/setup-android@v3
-                - name: Install SDK packages
-                  run: |
-                    yes | sdkmanager --licenses > /dev/null || true
-                    sdkmanager "platforms;android-36" "build-tools;36.0.0"
-                - name: Install Gradle
-                  uses: gradle/actions/setup-gradle@v4
-                  with:
-                    gradle-version: '8.13'
-                - name: Build APK
-                  run: gradle assembleDebug --no-daemon
-                - name: Upload APK
-                  uses: actions/upload-artifact@v4
-                  with:
-                    name: research-agent-v3-debug
-                    path: app/build/outputs/apk/debug/app-debug.apk
-          EOF
+          ZIP=$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)
 
-      - name: Commit unpacked project
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: V3 ZIP file not found"
+            exit 1
+          fi
+
+          rm -rf project
+          mkdir project
+          unzip -q "$ZIP" -d project
+
+          if [ -d "project/AndroidResearchAgentV3" ]; then
+            mv project/AndroidResearchAgentV3/* project/
+            mv project/AndroidResearchAgentV3/.[!.]* project/ 2>/dev/null || true
+            rmdir project/AndroidResearchAgentV3 2>/dev/null || true
+          fi
+
+          echo "Project files:"
+          find project -maxdepth 3 -type f | head -100
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Build Android V3
+        working-directory: project
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .
-          git commit -m "Unpack Android Research Agent V3" || echo "Nothing to commit"
-          git push
+          chmod +x gradlew 2>/dev/null || true
+
+          if [ -f "./gradlew" ]; then
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-agent-v3-debug
+          path: project/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
